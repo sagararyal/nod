@@ -11,7 +11,8 @@
 # - Analytics, feedback, traces and the onboarding email are off by default.
 #
 # Coolify settings: Base directory /deployment/coolify, compose file /compose.yaml,
-# Preserve repository ON (the runtime mounts ../self-host/docker-proxy.mjs),
+# Preserve repository ON (the runtime mounts ./docker-proxy.mjs, a copy of
+# ../self-host/docker-proxy.mjs, because Coolify keeps only the base directory),
 # Container naming: Consistent name.
 
 services:
@@ -93,7 +94,7 @@ services:
       BROWSER_CONTAINER: ${NOD_BROWSER_CONTAINER:?Set to nod-browser-<app uuid>}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ../self-host/docker-proxy.mjs:/app/docker-proxy.mjs:ro
+      - ./docker-proxy.mjs:/app/docker-proxy.mjs:ro
     networks: [control]
     read_only: true
     cap_drop: [ALL]
