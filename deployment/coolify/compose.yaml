@@ -1,0 +1,193 @@
+# Nod on Coolify (Docker Compose build pack, "Managed by Coolify").
+#
+# Same stack as deployment/self-host/compose.yaml, changed only where Coolify needs it:
+# - Secrets come from Coolify magic variables, so Coolify generates and stores them.
+# - No container_name: Coolify names each container "<service>-<app uuid>". With
+#   "Consistent name" on, the browser and workspace become nod-browser-<uuid> and
+#   nod-workspace-<uuid>, which is what Nod's runtime proxy accepts.
+#   Set NOD_BROWSER_CONTAINER and NOD_WORKSPACE_CONTAINER to those names in Coolify.
+# - No HTTPS profile: Coolify does not honour profiles, and Caddy would take ports 80/443
+#   from Coolify's proxy. TLS ends at Cloudflare or Coolify's Traefik.
+# - Analytics, feedback, traces and the onboarding email are off by default.
+#
+# Coolify settings: Base directory /deployment/coolify, compose file /compose.yaml,
+# Preserve repository ON (the runtime mounts ../self-host/docker-proxy.mjs),
+# Container naming: Consistent name.
+
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: deployment/self-host/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      NOD_ENVIRONMENT: production
+      NOD_HOST: 0.0.0.0
+      PORT: ${PORT:-4310}
+      NOD_DATA_ROOT: /var/lib/nod
+      NOD_PUBLIC_URL: ${NOD_PUBLIC_URL:?Set NOD_PUBLIC_URL to the https origin}
+      NOD_AUTH_TOKEN: ${SERVICE_HEX_64_NODAUTH}
+      NOD_VAULT_KEY: ${SERVICE_REALBASE64_32_NODVAULT}
+      DATABASE_URL: postgresql://nod:${SERVICE_HEX_64_POSTGRES}@postgres:5432/nod
+      DOCKER_HOST: tcp://runtime:2375
+      WORKSPACE_CONTAINER: ${NOD_WORKSPACE_CONTAINER:?Set to nod-workspace-<app uuid>}
+      BROWSER_CONTAINER: ${NOD_BROWSER_CONTAINER:?Set to nod-browser-<app uuid>}
+      NOD_ANALYTICS_ENABLED: ${NOD_ANALYTICS_ENABLED:-false}
+      NOD_FEEDBACK_ENABLED: ${NOD_FEEDBACK_ENABLED:-false}
+      NOD_TRACES_URL: ${NOD_TRACES_URL:-}
+      NOD_ONBOARDING_EMAIL_URL: ${NOD_ONBOARDING_EMAIL_URL:-}
+    ports:
+      - '${NOD_BIND_ADDRESS:-127.0.0.1}:${PORT:-4310}:${PORT:-4310}'
+    volumes:
+      - server-data:/var/lib/nod
+      - workspace-data:/var/lib/nod/workspaces
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=1777,size=256m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 512
+    mem_limit: ${NOD_SERVER_MEMORY:-2g}
+    networks: [backend, control, outbound]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      runtime:
+        condition: service_started
+      nod-browser:
+        condition: service_healthy
+      nod-workspace:
+        condition: service_started
+    healthcheck:
+      test: ['CMD', 'node', '/app/healthcheck.mjs']
+      interval: 15s
+      timeout: 6s
+      retries: 10
+      start_period: 60s
+
+  postgres:
+    image: postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nod
+      POSTGRES_PASSWORD: ${SERVICE_HEX_64_POSTGRES}
+      POSTGRES_DB: nod
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nod -d nod']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  runtime:
+    image: node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+    restart: unless-stopped
+    init: true
+    command: ['node', '/app/docker-proxy.mjs']
+    environment:
+      WORKSPACE_CONTAINER: ${NOD_WORKSPACE_CONTAINER:?Set to nod-workspace-<app uuid>}
+      BROWSER_CONTAINER: ${NOD_BROWSER_CONTAINER:?Set to nod-browser-<app uuid>}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../self-host/docker-proxy.mjs:/app/docker-proxy.mjs:ro
+    networks: [control]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+
+  nod-browser:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.browser
+    hostname: nod-browser
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    pids_limit: 1024
+    mem_limit: ${NOD_BROWSER_MEMORY:-3g}
+    shm_size: 512m
+    volumes:
+      - browser-data:/data
+    tmpfs:
+      - /tmp:size=512m
+      - /home/node:uid=1000,gid=1000,mode=700,size=256m
+    networks: [browser]
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          'const s=require("node:net").connect("/data/control.sock");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1))',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  nod-workspace:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.workspace
+    image: nod-coolify-workspace:local
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 512
+    mem_limit: ${NOD_WORKSPACE_MEMORY:-2g}
+    volumes:
+      - workspace-data:/workspace
+      - workspace-tools:/home/node
+    network_mode: service:workspace-network
+    depends_on:
+      workspace-network:
+        condition: service_healthy
+        restart: true
+    command: ['sleep', 'infinity']
+
+  workspace-network:
+    image: nod-coolify-workspace:local
+    pull_policy: never
+    dns: [1.1.1.1, 8.8.8.8]
+    user: root
+    restart: unless-stopped
+    init: true
+    entrypoint: /usr/local/bin/nod-workspace-network
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m
+    pids_limit: 32
+    mem_limit: 64m
+    networks: [workspace]
+    healthcheck:
+      test: ['CMD', 'test', '-f', '/tmp/network-ready']
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+networks:
+  backend:
+    internal: true
+  control:
+    internal: true
+  outbound:
+  browser:
+  workspace:
+
+volumes:
+  server-data:
+  postgres-data:
+  workspace-data:
+  workspace-tools:
+  browser-data:
