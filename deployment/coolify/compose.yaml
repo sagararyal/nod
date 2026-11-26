@@ -44,8 +44,9 @@ services:
     volumes:
       - server-data:/var/lib/nod
       - workspace-data:/var/lib/nod/workspaces
-      # Sagar's Personal/ vault notes, two-way via Syncthing (26 Nov 2026).
-      - vault-personal:/var/lib/nod/workspaces/${NOD_VAULT_WORKSPACE_ID:?Set to the workspace id}/Vault
+      # Sagar's Personal/ vault notes, two-way via Syncthing (26 Nov 2026). Coolify forbids ${} in
+      # volume targets, so Jay's workspace id is written out; change it here if the workspace changes.
+      - vault-personal:/var/lib/nod/workspaces/dd78cbf4-d149-4571-9461-780302c9f97b/Vault
     tmpfs:
       - /tmp:uid=1000,gid=1000,mode=1777,size=256m
     read_only: true
@@ -149,7 +150,7 @@ services:
     volumes:
       - workspace-data:/workspace
       - workspace-tools:/home/node
-      - vault-personal:/workspace/${NOD_VAULT_WORKSPACE_ID:?Set to the workspace id}/Vault
+      - vault-personal:/workspace/dd78cbf4-d149-4571-9461-780302c9f97b/Vault
     network_mode: service:workspace-network
     depends_on:
       workspace-network:
