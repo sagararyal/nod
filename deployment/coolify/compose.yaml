@@ -44,6 +44,8 @@ services:
     volumes:
       - server-data:/var/lib/nod
       - workspace-data:/var/lib/nod/workspaces
+      # Sagar's Personal/ vault notes, two-way via Syncthing (26 Nov 2026).
+      - vault-personal:/var/lib/nod/workspaces/${NOD_VAULT_WORKSPACE_ID:?Set to the workspace id}/Vault
     tmpfs:
       - /tmp:uid=1000,gid=1000,mode=1777,size=256m
     read_only: true
@@ -147,6 +149,7 @@ services:
     volumes:
       - workspace-data:/workspace
       - workspace-tools:/home/node
+      - vault-personal:/workspace/${NOD_VAULT_WORKSPACE_ID:?Set to the workspace id}/Vault
     network_mode: service:workspace-network
     depends_on:
       workspace-network:
@@ -177,6 +180,26 @@ services:
       timeout: 3s
       retries: 10
 
+  # Two-way sync of Sagar's vault Personal/ folder with his laptop (26 Nov 2026).
+  # Peer to peer, end-to-end encrypted; relays when both sides are behind NAT.
+  # GUI stays inside the container (127.0.0.1); configure with `syncthing cli` via docker exec.
+  syncthing:
+    image: syncthing/syncthing:2.1.7
+    restart: unless-stopped
+    user: '1000:1000'
+    hostname: jay-mini
+    environment:
+      STGUIADDRESS: 127.0.0.1:8384
+      STNOUPGRADE: '1'
+    volumes:
+      - syncthing-config:/var/syncthing/config
+      - vault-personal:/var/syncthing/Personal
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 256m
+    networks: [outbound]
+
 networks:
   backend:
     internal: true
@@ -192,3 +215,5 @@ volumes:
   workspace-data:
   workspace-tools:
   browser-data:
+  vault-personal:
+  syncthing-config:
